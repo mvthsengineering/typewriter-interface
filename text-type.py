@@ -1,10 +1,13 @@
 from flask import Flask, request
 from twilio.twiml.messaging_response import Message, MessagingResponse
 from datetime import datetime
-import serial
+#from pandas import read_csv
+from serial import Serial
+#import serial
 import atexit
+#import csv
 
-port = serial.Serial('/dev/ttyACM0', 9600)
+port = Serial('/dev/ttyACM0', 9600)
 
 def OnExit(user):
     port.close()
@@ -17,33 +20,35 @@ app = Flask(__name__)
 
 def sms():
     now = datetime.now()
-    current_time = now.strftime("%D %I:%M%p ")
+    
+    #current_time = now.strftime("%D %I:%M%p ")
+    current_time = now.strftime("%I:%M%p ")
 
 
     number = request.form['From']
     message_body = request.form['Body']
 
-    current_time = current_time.encode()
-    #message = message_body.encode()
+    #numbers = read_csv('phone_numbers.csv')
 
-    port.write(current_time)
-    m1 = message_body[0:60]
-    port.write(m1.encode())
-    if len(message_body) > 60:
-        port.write(b'-')
+    #from IPython import embed; embed()
+    #numbers = numbers.set_index('number').to_dict()['name']
+    LINE_WIDTH = 70
+
+    text_to_write = current_time + message_body
+   
+    while(text_to_write):
+        port.write(text_to_write[:LINE_WIDTH].encode())
+        text_to_write = text_to_write[LINE_WIDTH:]
+        if text_to_write:
+            port.write(b'-')
         port.write(b'\r')
-    #if len(message_body) > 60:
-        #m2 = message_body[60:]
-        m2 = message_body[60:]
 
-        #message = m2.encode()
-        port.write(m2.encode())
-        #port.write(b'\r')
-    
-    port.write(b'\r')
     print(current_time)
     print(number)
     print(message_body)
+   # with open('numbers.csv', mode='a') as csv_file:
+   #@     writer = csv.writer(csv_file)
+    #    writer.writerow(number)
     return message_body
 
 if __name__ == '__main__':
