@@ -3,9 +3,11 @@ from twilio.twiml.messaging_response import Message, MessagingResponse
 from datetime import datetime
 from pandas import read_csv
 from serial import Serial
+from csv import writer
 import atexit
 
-port = Serial('/dev/ttyACM0', 9600)
+#port = Serial('/dev/ttyACM0', 9600)
+port = Serial('/dev/ttyACM0', 115200)
 
 def OnExit(user):
     port.close()
@@ -30,16 +32,21 @@ def sms():
     message_name = numbers.get(message_number)
 
     if not bool(message_name):
+        with open('phone_numbers.csv', 'a') as f:
+            write = writer(f)
+            write.writerow([message_number, ' '])
+            f.close()
         sender = message_number + ': '
     else:
         sender = message_name + ': '
 
     LINE_WIDTH = 70
+    MESSAGE_WIDTH = 190
 
     text_to_write = current_time + sender + message_body
 
-    if len(text_to_write) > 190:
-        text_to_write = text_to_write[:190]
+    if len(text_to_write) > MESSAGE_WIDTH:
+        text_to_write = text_to_write[:MESSAGE_WIDTH]
    
     while(text_to_write):
         port.write(text_to_write[:LINE_WIDTH].encode())
