@@ -39,7 +39,7 @@
 #define C03     6
 
 #define ZERO_PULSE_DELAY  400        // Length of initial pulse, hardcoded (see below)
-#define PRESS_COUNT       5          // Number of clocks for each press
+#define PRESS_COUNT       5          // Number of clocks for each press NOTE THIS NUMBER IS VERY IMPORTANT. IT IS MAGIC NUMBER THAT WORKS!
 #define RISE_TOTAL        10         // Total number of rising pulses (or timing sequences) after the first falling pulse
 #define SHIFT_ON          3          // Correct pulse for shift (3rd of sequence)
 #define SHIFT_OFF         13         // Dummy pulse count, outside range and cannot be reached
@@ -49,10 +49,11 @@
 #define CONTROL_PULSE     1
 
 // States
-#define PRESS_KEY   0
-//#define WAIT        1
-#define ZERO_PULSE  3
-#define SERIAL      4
+#define PRESS_KEY     0
+//#define RETURN_WAIT   1
+#define ZERO_PULSE    3
+#define SERIAL        4
+#define SET_KEY       5
 
 //Special pins
 #define SHIFT_LOCK_WRITE  5 // Pin used to set shift or shift_lock
@@ -69,6 +70,8 @@ volatile uint8_t control_pin;     // Which of eight input pins seven on CN2 and 
 volatile uint8_t state = SERIAL;    // This sets the state of the code.
 volatile uint8_t shift_status = SHIFT_OFF;
 
+volatile uint8_t carriage_return = false;
+
 uint8_t controlPins[7] = {C03, C04, C08, C09, C10, C11, C12}; // Set of pins controlling inputs on CN2
 
 // For testing
@@ -77,11 +80,11 @@ char ascii_key = 'R';               // Variable for holding ascii characters
 char ascii_key_last;                // For dealing with double types i.e. oo, bb
 //char char_count = 0;
 
-// Special keyboard characters that require a shift.
-const char odds_char[] = "!@#$%&*()_+:\"?";
-const char keys_char[] = "abcdefghijklmnopqrstuvwxyz.,-=;'1234567890";
-const char caps_char[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-const char ctrs_char[] = "\r, \b, \n";
+const char odds_char[] = "!@#$%&*()_+:\"\?";                                // Shift characters
+const char keys_char[] = "abcdefghijklmnopqrstuvwxyz./,-=;\'1234567890";    // Non-shift characters
+const char caps_char[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";                      // Capitals
+const char ctrs_char[] = "\r\b\n";                                          // Control characters
+const char spcs_char[] = " ";                                               // Space
 
 //bool shift_key = false;  // Set if the character uses the shift key
 
@@ -127,10 +130,10 @@ uint8_t letter[128][2] = {
   {0, 0}, //30 NULL
   {0, 0}, //31 NULL
   {C03, 6}, //32 SPACE
-  {C12, 1}, //33 !
-  {C04, 3}, //34 "
-  {C11, 8}, //35 #
-  {C12, 8}, //36 $
+  {C12, 1}, //33 ! shift 1
+  {C04, 3}, //34 " shift '
+  {C11, 8}, //35 # shift 3
+  {C12, 8}, //36 $ shift 4 NOT WORKING ||
   {C12, 9}, //37 %
   {C12, 0}, //38 &
   {C04, 3}, //39 '
@@ -242,36 +245,31 @@ void start_pulse_int() {
     if (press_counter++ < PRESS_COUNT) {                      // Check how many pulse sets have passed
       // Clear the pulse count
       if (control_pulse == 0) {                               // The zero pulse is a special case and must be handled w/o interrupts
-        digitalWrite(control_pin, LOW);
+        pinMode(control_pin, OUTPUT);                         // Engage control pin low
         detachInterrupt(digitalPinToInterrupt(START_SIGNAL));
         state = ZERO_PULSE;
       } else {
-        detachInterrupt(digitalPinToInterrupt(START_SIGNAL));     // If not zero than start counting pulses in the count int routine
-        attachInterrupt(digitalPinToInterrupt(START_SIGNAL), count_pulse_int, RISING);
+        attachInterrupt(digitalPinToInterrupt(START_SIGNAL), count_pulse_int, RISING); // If not zero than start counting pulses in the count int routine
       }
     } else {                                                  // We have completed the specified number of pulse sets, return and wait
       press_counter = 0;
       detachInterrupt(digitalPinToInterrupt(START_SIGNAL));
-      //state = WAIT; // For non serial applications
-      state = SERIAL; // For serial applications
+      state = SERIAL;                                         // For serial applications
     }
-  }
+  } 
 }
 
 // Count each pulse and check for control pulse
 void count_pulse_int() {
   if (pulse_counter >= RISE_TOTAL) {                          // Are we at the end of a pulse set (10 total pulses)
-    detachInterrupt(digitalPinToInterrupt(START_SIGNAL));     // Return to waiting for start pulse
-    attachInterrupt(digitalPinToInterrupt(START_SIGNAL), start_pulse_int, FALLING);
-    
-  } else if (pulse_counter == control_pulse) {                // Is the pulse we are looking for? 
-    digitalWrite(control_pin, LOW);                           // Pull CN2 line low and wait for end of pulse
-    detachInterrupt(digitalPinToInterrupt(START_SIGNAL));
+    attachInterrupt(digitalPinToInterrupt(START_SIGNAL), start_pulse_int, FALLING); // Return to waiting for start pulse
+
+  } else if (pulse_counter == control_pulse) {                // Is the pulse we are looking for?
+    pinMode(control_pin, OUTPUT);                             // Engage pin, pull CN2 line low and wait for end of pulse
     attachInterrupt(digitalPinToInterrupt(START_SIGNAL), end_pulse_int, FALLING);
   }
   if (pulse_counter == shift_status) {                        // Do we need to add a shift pulse?
-    digitalWrite(SHIFT_LOCK_WRITE, LOW);                      // Pull the shift line CN1-4 low and wait for end of pulse
-    detachInterrupt(digitalPinToInterrupt(START_SIGNAL));
+    pinMode(SHIFT_LOCK_WRITE, OUTPUT);                        // Engage shift low CN1-4 low and wait for end of pulse
     attachInterrupt(digitalPinToInterrupt(START_SIGNAL), end_pulse_int, FALLING);
   }
   pulse_counter++;
@@ -279,28 +277,19 @@ void count_pulse_int() {
 
 // Find end of pulse and go back to counting pulses
 void end_pulse_int() {
-  digitalWrite(control_pin, HIGH);
-  digitalWrite(SHIFT_LOCK_WRITE, HIGH);   //SHIFT_NEW
-  detachInterrupt(digitalPinToInterrupt(START_SIGNAL));
+  pinMode(control_pin, INPUT);                // Release key
+  pinMode(SHIFT_LOCK_WRITE, INPUT);           // Release shift
   attachInterrupt(digitalPinToInterrupt(START_SIGNAL), count_pulse_int, RISING);
 }
 
 void setup() {
 
-  // Serial.begin(115200);
-  Serial.begin(9600);
-
-  // Set CN2 drive pins as OUTPUT
-  for (int x = 0; x < sizeof(controlPins); x++) {
-    pinMode(controlPins[x], OUTPUT);
-    digitalWrite(controlPins[x], HIGH);
-  }
+  Serial.begin(115200);
+  //Serial.begin(9600);
 
   // Set read control for the start signal
   pinMode(START_SIGNAL, INPUT_PULLUP);
 
-  // Set the interrupt
-  // attachInterrupt(digitalPinToInterrupt(START_SIGNAL), start_pulse_int, FALLING);
 }
 
 
@@ -310,6 +299,10 @@ void loop() {
     case SERIAL:
       if (Serial.available() > 0) {
         ascii_key = Serial.read();
+        //Serial.print(ascii_key);
+        //Serial.print(ascii_key, DEC);
+
+        if (ascii_key == 'I') ascii_key = 'l'; // Hack to account for 'I' showing up as two pipes || weird!
 
         // Check to see which sort of character is being sent.
         char *odds = strchr(odds_char, ascii_key);
@@ -317,44 +310,50 @@ void loop() {
         char *caps = strchr(caps_char, ascii_key);
         char *ctrs = strchr(ctrs_char, ascii_key);
 
-        if (caps != NULL) {                       // We have a capital letter
+        if (caps != NULL) {                      // We have a capital letter
           shift_status = SHIFT_ON;
-          pinMode(SHIFT_LOCK_WRITE, OUTPUT);
           ascii_key += 32;
-        } else if (odds != NULL) {               // We have a special character accessed with a shift
+          state = SET_KEY;
+          //Serial.print('c');
+        } else if (odds != NULL) {              // We have a special character accessed with a shift
           shift_status = SHIFT_ON;
-          pinMode(SHIFT_LOCK_WRITE, OUTPUT);
+          state = SET_KEY;
+          //Serial.print('o');
         } else if (keys != NULL) {              // We have a key not accessed by shift
           shift_status = SHIFT_OFF;
-          pinMode(SHIFT_LOCK_WRITE, INPUT);  
-        } else if (ctrs != NULL) {              // We have a control character i.e. RETURN
+          state = SET_KEY;
+          //Serial.print('k');
+          //  } else if (ctrs != NULL) {              // We have a control character i.e. RETURN
+        } else if (ascii_key == 13) { 
+          carriage_return = true;
           shift_status = SHIFT_OFF;
-          pinMode(SHIFT_LOCK_WRITE, INPUT);  // This removes the pin from the circuit. So it does not interferre with the return key.
+          state = SET_KEY;
+          //Serial.print('r');
+        } else if (spcs_char != NULL) {         // We have a space
+          shift_status = SHIFT_OFF;
+          state = SET_KEY;
+          //Serial.print('s');
         }
-        /*
-                if (isupper(ascii_key)) {
-                  shift_status = SHIFT_ON;
-                  pinMode(SHIFT_LOCK_WRITE, OUTPUT);
-                  ascii_key += 32;
-                } else {
-                  shift_status = SHIFT_OFF;
-                  pinMode(SHIFT_LOCK_WRITE, INPUT);  // This removes the pin from the circuit. So it does not interferre with the return key.;
-                }
-        */
-        // Set the correct control pin on the CN2 and the correct pulse to wait for
-        control_pin = letter[ascii_key][CONTROL_PIN];
-        control_pulse = letter[ascii_key][CONTROL_PULSE];
-
-        // Duplicate keys must be slowed down due to some engineered double type prevention in the typewriter.
-        ascii_key_last = ascii_key;
-        if (ascii_key_last == ascii_key) {
-          delay(100);
-        }
-
-        // Go to key state and turn interrupt
-        state = PRESS_KEY;
-        attachInterrupt(digitalPinToInterrupt(START_SIGNAL), start_pulse_int, FALLING);
       }
+      break;
+
+    case SET_KEY:
+
+      // Set the correct control pin on the CN2 and the correct pulse to wait for
+      control_pin = letter[ascii_key][CONTROL_PIN];
+      control_pulse = letter[ascii_key][CONTROL_PULSE];
+
+      // Duplicate keys must be slowed down due to some engineered double type prevention in the typewriter.
+      ascii_key_last = ascii_key;
+      if (ascii_key_last == ascii_key) {
+        delay(100);
+      }
+
+      //delayMicroseconds(200);      //This might be necessary NOT SURE WHY!
+
+      // Go to key state and turn interrupt
+      state = PRESS_KEY;
+      attachInterrupt(digitalPinToInterrupt(START_SIGNAL), start_pulse_int, FALLING);
       break;
 
     // Do nothing until triggered by start pulse
@@ -364,7 +363,7 @@ void loop() {
     // The zero pulse is a special case and must be handled with a hard delay as opposed from the other pu
     case ZERO_PULSE:
       delayMicroseconds(ZERO_PULSE_DELAY);
-      digitalWrite(control_pin, HIGH);
+      pinMode(control_pin, INPUT);          // Release control pin.
       state = PRESS_KEY;
       attachInterrupt(digitalPinToInterrupt(START_SIGNAL), count_pulse_int, RISING);
 
